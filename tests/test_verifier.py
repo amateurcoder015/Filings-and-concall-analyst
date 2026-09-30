@@ -289,3 +289,120 @@ WEAK_PAGE = "Management said demand remained cautious and revenue grew 12% with 
 )
 def test_near_identical_plain_word_differences_are_weak(quote, page):
     assert verify_claim(claim(quote), page) == "weak"
+
+
+# --- Fix round 3: ratios, qualifiers, antonym prefixes, partial edge words ----
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("bonus issue in the ratio of 1", "The bonus issue in the ratio of 1:1 was approved."),
+        ("split in the ratio of 1", "The split in the ratio of 1:5 was approved."),
+        ("1% of revenue in the quarter", "Other income was <1% of revenue in the quarter"),
+        ("5% growth in the quarter", "Revenue showed ~5% growth in the quarter"),
+        ("5% growth in the quarter", "Revenue showed ≈" + "5% growth in the quarter"),
+        ("5% growth in the quarter", "Revenue showed ±5% growth in the quarter"),
+        ("5% growth in the quarter", "Revenue showed >5% growth in the quarter"),
+        ("5% versus last year", "Margin moved +5% versus last year"),
+        ("5% versus last year", "Margin moved *5% versus last year"),
+    ],
+)
+def test_round3_unclean_boundaries_fail(quote, page):
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("Guidance for the year", "Guidance for the year: growth of 12% is expected."),
+        ("Guidance for the year", "Guidance for the year:growth is expected."),
+        ("Operating margin was 21.1", "Operating margin was 21.1. Next: sentence."),
+        ("ratio of the split", "The ratio of the split: one for one."),
+    ],
+)
+def test_round3_clean_colon_and_period_verify(quote, page):
+    assert verify_claim(claim(quote), page) == "verified"
+
+
+def _sentence(word):
+    return f"The company said that gross {word} assets in the quarter were well within the guided range overall."
+
+
+@pytest.mark.parametrize(
+    "quote_word, page_word",
+    [
+        ("increasing", "decreasing"),
+        ("increasingly", "decreasingly"),
+        ("appreciation", "depreciation"),
+        ("unprofitable", "profitable"),
+        ("unaudited", "audited"),
+        ("unqualified", "qualified"),
+        ("non performing", "performing"),
+        ("non-performing", "performing"),
+        ("non-operating", "operating"),
+        ("non-recurring", "recurring"),
+        ("unlikely", "likely"),
+        ("unable", "able"),
+        ("insufficient", "sufficient"),
+    ],
+)
+@pytest.mark.parametrize("swap", [False, True])
+def test_antonym_prefix_pairs_fail(quote_word, page_word, swap):
+    a, b = (page_word, quote_word) if swap else (quote_word, page_word)
+    assert verify_claim(claim(_sentence(a)), _sentence(b)) == "failed"
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("Seven directors attended the board meeting held on Monday", "Seventy directors attended the board meeting held on Monday"),
+        ("The board met eight times during the financial year overall", "The board met eighty times during the financial year overall"),
+        ("The board met nine times during the financial year overall", "The board met ninety times during the financial year overall"),
+        ("The company has none of its debt maturing within the year", "The company has one of its debt maturing within the year"),
+        ("The order book of Rs 5 crore was reported in the year", "The order book of Rs 5 hundred crore was reported in the year"),
+        ("Revenue growth of 13% in the quarter across segments", "Revenue growth of over 13% in the quarter across segments"),
+        ("Revenue growth of over 13% in the quarter across segments", "Revenue growth of 13% in the quarter across segments"),
+        ("Revenue growth of about 13% in the quarter across segments", "Revenue growth of 13% in the quarter across segments"),
+        ("Margin was 13% in the quarter across all of the segments", "Margin was at least 13% in the quarter across all of the segments"),
+        ("Margin was 13% in the quarter across all of the segments", "Margin was less than 13% in the quarter across all of the segments"),
+        ("ease in the quarter was notable across all of the segments", "decrease in the quarter was notable across all of the segments"),
+        ("the growth of 5% versus last year was strong overall", "the growth of 25% versus last year was strong overall"),
+    ],
+)
+def test_expanded_protected_words_and_cut_guards_fail(quote, page):
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "Managment said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter.",
+        "Management said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter.".replace("quarter", "quartcr"),
+        "Rnanagement said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter.",
+        "Management said demand remained cautious and revenue grew 12% with rnargin at 21.1% in the quarter.",
+        "Management said dernand remained cautious and revenue grew 12% with margin at 21.1% in the quarter.",
+        "Management said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter of this yeer.",
+    ],
+)
+def test_ocr_style_typos_stay_weak(quote):
+    page = "Management said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter of this year."
+    assert verify_claim(claim(quote), page) == "weak"
+
+
+def test_one_plain_word_deleted_stays_weak():
+    quote = "Reliance reported a steady performance in the quarter overall"
+    page = "Reliance Jio reported a steady performance in the quarter overall"
+    assert verify_claim(claim(quote), page) == "weak"
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("argin was 21.1% in the quarter", "The margin was 21.1% in the quarter"),
+        ("the total number of financial poi", "The total number of financial points were reviewed by the auditors."),
+        ("lying demand environment remains cautious", "Management said the under-\nlying demand environment remains cautious and budgets are tight."),
+    ],
+)
+def test_cut_edge_words_are_not_failed(quote, page):
+    assert verify_claim(claim(quote), page) in ("weak", "verified")
