@@ -206,3 +206,86 @@ def test_punctuation_only_quote_fails():
     page = "Results ............ shown here"
     assert verify_claim(claim("." * 12), page) == "failed"
     assert verify_claim(claim("-" * 12), "Results ------------ shown here") == "failed"
+
+
+# --- Fix round 2: clean-boundary exact path and token-skeleton weak path ------
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("operating margin was 21", "The operating margin was 21.17% for the quarter."),
+        ("order inflow stood at Rs 1", "Order inflow stood at Rs 1,200 crore in the period."),
+        ("inflow stood at Rs 1,200", "Order inflow stood at Rs 1,200.5 crore in the period."),
+        ("revenue growth of 2", "Revenue growth of 2-3% expected next year."),
+        ("results for fiscal 2025", "Results for fiscal 2025-26 were strong."),
+        ("$5 million versus last year", "Net change was -$5 million versus last year"),
+        ("Rs 5 crore versus last year", "Net change was -Rs 5 crore versus last year"),
+        ("Rs 5.2 crore for the period", "Net result was (Rs 5.2 crore for the period)"),
+        ("₹ 5.2 crore in the period", "Net result was (₹ 5.2 crore in the period)"),
+        ("loss of Rs 5.2 crore", "The net result was (Rs 5.2 crore) in the period"),
+        ("5% versus the previous quarter", "Cash flow moved by ‐5% versus the previous quarter"),
+        ("5% versus the previous quarter", "Cash flow moved by ‑5% versus the previous quarter"),
+        ("5% versus the previous quarter", "Cash flow moved by ‒5% versus the previous quarter"),
+        ("5% versus the previous quarter", "Cash flow moved by –" + "5% versus the previous quarter"),
+        ("5% versus the previous quarter", "Share of total was 3/5% versus the previous quarter"),
+    ],
+)
+def test_unclean_boundary_probes_fail(quote, page):
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("Operating margin was 21.1", "Operating margin was 21.1. Next sentence."),
+        ("Operating margin was 21.1", "Operating margin was 21.1% overall."),
+        ("Operating margin was 21.1", "Operating margin was 21.1, and costs fell."),
+        ("Operating margin was 21.1%", "Headline\nOperating margin was 21.1% overall"),
+        ("(Rs 5.2 crore) in the period", "Net result was (Rs 5.2 crore) in the period"),
+        ("Net result was (Rs 5.2 crore)", "Net result was (Rs 5.2 crore)\nnext line"),
+        ("(Rs 5.2 crore) in the period", "(Rs 5.2 crore) in the period"),
+        ("said it was “cautious” and tight", "Management said it was “cautious” and tight."),
+        ("Management said it was “cautious”", "Management said it was “cautious” and tight."),
+    ],
+)
+def test_clean_boundary_probes_verify(quote, page):
+    assert verify_claim(claim(quote), page) == "verified"
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("Net profit of Rs 5 crore for the period overall", "Net loss of Rs 5 crore for the period overall"),
+        ("Net loss of Rs 5 crore for the period overall", "Net profit of Rs 5 crore for the period overall"),
+        ("Revenue is expected to fall in the second half of the year", "Revenue is expected to rise in the second half of the year"),
+        ("Order inflow stood at Rs 1,200 crores across segments", "Order inflow stood at Rs 1,200 lakhs across segments"),
+        ("Margin was above the guided range for the full year ahead", "Margin was below the guided range for the full year ahead"),
+        ("Management doesn't expect demand to recover in the second half", "Management does expect demand to recover in the second half"),
+        ("Revenue decreased in the quarter while costs increased sharply overall", "Revenue increased in the quarter while costs decreased sharply overall"),
+        ("The board did not approve and did not recommend the dividend", "The board did approve and did not recommend the dividend"),
+        ("The board did not approve and did not recommend the dividend", "The board did not approve and did recommend the dividend"),
+        ("Order inflow stood at Rs 1,200 lakh across segments", "Order inflow stood at Rs 1,200 crore across segments"),
+        ("Deal wins worth $4.2 billion in the quarter just ended", "Deal wins worth $4.2 million in the quarter just ended"),
+    ],
+)
+def test_token_skeleton_changes_fail(quote, page):
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+WEAK_PAGE = "Management said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter."
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("Managment said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter.", WEAK_PAGE),
+        ("Management said deman remained cautious and revenue grew 12% with margin at 21.1% in the quarter.", WEAK_PAGE),
+        ("argin was 21.1% in the quarter and revenue", "The margin was 21.1% in the quarter and revenue rose."),
+        ("the margin was 21.1% in the quarter and reven", "The margin was 21.1% in the quarter and revenue rose."),
+    ],
+)
+def test_near_identical_plain_word_differences_are_weak(quote, page):
+    assert verify_claim(claim(quote), page) == "weak"
