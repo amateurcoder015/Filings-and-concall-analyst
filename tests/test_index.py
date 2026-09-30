@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from backend.index.embedder import HashingEmbedder
@@ -72,3 +74,48 @@ def test_stemming_finds_plural_and_singular_forms(index):
     # And "hike" should match "hikes" in the same page
     hike_hits = index.search("hike")
     assert hike_hits and any(h.doc_id == "q2-concall" for h in hike_hits)
+
+
+def test_concurrent_search_and_ingest(tmp_path):
+    """Test that search and ingest can safely run concurrently from multiple threads."""
+    index = PageIndex(str(tmp_path / "test.db"), HashingEmbedder())
+    index.add_pages(make_pages())
+
+    exceptions = []
+
+    def search_worker():
+        try:
+            for _ in range(50):
+                index.search("margin")
+                index.search("revenue")
+                index.search("dividend")
+        except Exception as e:
+            exceptions.append(e)
+
+    def ingest_worker():
+        try:
+            for _ in range(20):
+                index.add_pages(make_pages())
+        except Exception as e:
+            exceptions.append(e)
+
+    # Start 4 search threads and 1 ingest thread
+    threads = []
+    for _ in range(4):
+        t = threading.Thread(target=search_worker)
+        threads.append(t)
+        t.start()
+
+    ingest_t = threading.Thread(target=ingest_worker)
+    threads.append(ingest_t)
+    ingest_t.start()
+
+    # Wait for all threads to finish
+    for t in threads:
+        t.join()
+
+    # Check no exceptions occurred
+    assert exceptions == [], f"Exceptions in threads: {exceptions}"
+
+    # Verify final state
+    assert index.page_counts() == {"q2-results": 2, "q2-concall": 1, "ar-fy25": 1}

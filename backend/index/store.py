@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
 from collections import defaultdict
 from pathlib import Path
 
@@ -32,6 +33,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(text, tokenize = 'porter
 class PageIndex:
     def __init__(self, db_path, embedder):
         self._embedder = embedder
+        self._lock = threading.RLock()
         if str(db_path) != ":memory:":
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         # FastAPI serves requests from a thread pool, so the connection is shared across threads.
@@ -41,47 +43,52 @@ class PageIndex:
     def add_pages(self, pages: list[Page]) -> None:
         if not pages:
             return
+        # Compute embeddings outside the lock (this is slow and doesn't touch the DB)
         vectors = self._embedder.embed([p.text for p in pages])
-        with self._db:
-            for page, vector in zip(pages, vectors):
-                row = self._db.execute(
-                    "SELECT id FROM pages WHERE doc_id = ? AND page_no = ?",
-                    (page.doc_id, page.page_no),
-                ).fetchone()
-                if row:
-                    self._db.execute("DELETE FROM pages_fts WHERE rowid = ?", (row[0],))
-                    self._db.execute("DELETE FROM pages WHERE id = ?", (row[0],))
-                cursor = self._db.execute(
-                    "INSERT INTO pages (doc_id, page_no, doc_type, period, text, low_confidence, embedding)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        page.doc_id,
-                        page.page_no,
-                        page.doc_type,
-                        page.period,
-                        page.text,
-                        int(page.low_confidence),
-                        np.asarray(vector, dtype=np.float32).tobytes(),
-                    ),
-                )
-                self._db.execute(
-                    "INSERT INTO pages_fts (rowid, text) VALUES (?, ?)",
-                    (cursor.lastrowid, page.text),
-                )
+        # Hold lock only around DB writes
+        with self._lock:
+            with self._db:
+                for page, vector in zip(pages, vectors):
+                    row = self._db.execute(
+                        "SELECT id FROM pages WHERE doc_id = ? AND page_no = ?",
+                        (page.doc_id, page.page_no),
+                    ).fetchone()
+                    if row:
+                        self._db.execute("DELETE FROM pages_fts WHERE rowid = ?", (row[0],))
+                        self._db.execute("DELETE FROM pages WHERE id = ?", (row[0],))
+                    cursor = self._db.execute(
+                        "INSERT INTO pages (doc_id, page_no, doc_type, period, text, low_confidence, embedding)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            page.doc_id,
+                            page.page_no,
+                            page.doc_type,
+                            page.period,
+                            page.text,
+                            int(page.low_confidence),
+                            np.asarray(vector, dtype=np.float32).tobytes(),
+                        ),
+                    )
+                    self._db.execute(
+                        "INSERT INTO pages_fts (rowid, text) VALUES (?, ?)",
+                        (cursor.lastrowid, page.text),
+                    )
 
     def get_page(self, doc_id: str, page_no: int) -> Page | None:
-        row = self._db.execute(
-            "SELECT doc_id, page_no, doc_type, period, text, low_confidence"
-            " FROM pages WHERE doc_id = ? AND page_no = ?",
-            (doc_id, page_no),
-        ).fetchone()
-        if not row:
-            return None
-        return Page(row[0], row[1], row[2], row[3], row[4], bool(row[5]))
+        with self._lock:
+            row = self._db.execute(
+                "SELECT doc_id, page_no, doc_type, period, text, low_confidence"
+                " FROM pages WHERE doc_id = ? AND page_no = ?",
+                (doc_id, page_no),
+            ).fetchone()
+            if not row:
+                return None
+            return Page(row[0], row[1], row[2], row[3], row[4], bool(row[5]))
 
     def page_counts(self) -> dict[str, int]:
-        rows = self._db.execute("SELECT doc_id, COUNT(*) FROM pages GROUP BY doc_id").fetchall()
-        return {doc_id: count for doc_id, count in rows}
+        with self._lock:
+            rows = self._db.execute("SELECT doc_id, COUNT(*) FROM pages GROUP BY doc_id").fetchall()
+            return {doc_id: count for doc_id, count in rows}
 
     def search(
         self,
@@ -93,24 +100,27 @@ class PageIndex:
         query = query.strip()
         if not query:
             return []
-        keyword = self._keyword_rank(query, doc_type, period)
-        semantic = self._semantic_rank(query, doc_type, period)
+        with self._lock:
+            keyword = self._keyword_rank(query, doc_type, period)
+            semantic = self._semantic_rank(query, doc_type, period)
 
-        scores: dict[int, float] = defaultdict(float)
-        for ranking in (keyword, semantic):
-            for rank, page_id in enumerate(ranking):
-                scores[page_id] += 1.0 / (RRF_K + rank + 1)
+            scores: dict[int, float] = defaultdict(float)
+            for ranking in (keyword, semantic):
+                for rank, page_id in enumerate(ranking):
+                    scores[page_id] += 1.0 / (RRF_K + rank + 1)
 
-        top = sorted(scores.items(), key=lambda item: -item[1])[:top_k]
-        hits: list[PageHit] = []
-        for page_id, score in top:
-            row = self._db.execute(
-                "SELECT doc_id, page_no, doc_type, period, text FROM pages WHERE id = ?",
-                (page_id,),
-            ).fetchone()
-            snippet = re.sub(r"\s+", " ", row[4]).strip()[:SNIPPET_CHARS]
-            hits.append(PageHit(row[0], row[1], row[2], row[3], snippet, score))
-        return hits
+            top = sorted(scores.items(), key=lambda item: -item[1])[:top_k]
+            hits: list[PageHit] = []
+            for page_id, score in top:
+                row = self._db.execute(
+                    "SELECT doc_id, page_no, doc_type, period, text FROM pages WHERE id = ?",
+                    (page_id,),
+                ).fetchone()
+                if row is None:
+                    continue
+                snippet = re.sub(r"\s+", " ", row[4]).strip()[:SNIPPET_CHARS]
+                hits.append(PageHit(row[0], row[1], row[2], row[3], snippet, score))
+            return hits
 
     @staticmethod
     def _filter_sql(doc_type: str | None, period: str | None) -> tuple[str, list]:
