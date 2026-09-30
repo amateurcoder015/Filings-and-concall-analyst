@@ -96,3 +96,113 @@ def test_mostly_unverified_flag():
     fine = VerifiedAnswer("s", [VerifiedClaim(c, "verified"), VerifiedClaim(c, "verified"), VerifiedClaim(c, "failed")], False)
     assert mixed.mostly_unverified is True
     assert fine.mostly_unverified is False
+
+
+# --- Fix round 1: hardening regressions -------------------------------------
+
+
+def test_truncated_number_fails():
+    assert verify_claim(claim("operating margin was 21.1"), "The operating margin was 21.17% for the quarter.") == "failed"
+
+
+def test_truncated_year_fails():
+    assert verify_claim(claim("revenue for fiscal 202"), "Revenue for fiscal 2025 rose in the quarter") == "failed"
+
+
+def test_truncated_rupee_amount_fails():
+    assert verify_claim(claim("net profit rose to Rs 4"), "Net profit rose to Rs 45 crore") == "failed"
+
+
+def test_quote_starting_mid_number_fails():
+    assert verify_claim(claim("1.1% for the quarter overall"), "Margin was 21.1% for the quarter overall") == "failed"
+
+
+def test_dropped_hyphen_minus_fails():
+    page = "Cash flow moved by -5% versus the previous quarter"
+    assert verify_claim(claim("5% versus the previous quarter"), page) == "failed"
+
+
+def test_dropped_unicode_minus_fails():
+    page = "Cash flow moved by −5% versus the previous quarter"
+    assert verify_claim(claim("5% versus the previous quarter"), page) == "failed"
+
+
+def test_dropped_parentheses_negative_fails():
+    assert verify_claim(claim("moved by 5.2 crore in the period"), "Cash moved by (5.2) crore in the period") == "failed"
+
+
+def test_hyphen_range_not_joined_percent():
+    assert verify_claim(claim("growth of 23% expected next year"), "Growth of 2-3% expected next year") == "failed"
+
+
+def test_hyphen_range_not_joined_rupees():
+    assert verify_claim(claim("EBITDA of Rs 1012 crore reported"), "EBITDA of Rs 10-12 crore reported") == "failed"
+
+
+def test_hyphen_range_not_joined_fiscal_year():
+    assert verify_claim(claim("fiscal 202526"), "Results for fiscal 2025-26 were strong") == "failed"
+
+
+def test_swapped_figures_fail():
+    page = "Revenue grew 12% in the quarter and attrition fell to 13% overall."
+    quote = "Revenue grew 13% in the quarter and attrition fell to 12% overall."
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+def test_changed_fiscal_year_label_fails():
+    page = "Guidance for FY25 was revised upward after the strong quarter results."
+    quote = "Guidance for FY26 was revised upward after the strong quarter results."
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+def test_changed_quarter_label_fails():
+    page = "Deal wins in Q2 were the highest in the last eight quarters overall."
+    quote = "Deal wins in Q3 were the highest in the last eight quarters overall."
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+def test_changed_unit_crore_lakh_fails():
+    page = "Total order inflow for the period stood at Rs 1,200 crore across segments."
+    quote = "Total order inflow for the period stood at Rs 1,200 lakh across segments."
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+def test_changed_unit_million_billion_fails():
+    page = "The company reported deal wins worth $4.2 million in the quarter just ended."
+    quote = "The company reported deal wins worth $4.2 billion in the quarter just ended."
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+def test_changed_direction_fails():
+    page = "Attrition increased sharply during the quarter across all the business units."
+    quote = "Attrition decreased sharply during the quarter across all the business units."
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+def test_inserted_negation_fails():
+    page = "Management expects demand to recover in the second half of the year ahead."
+    quote = "Management does not expect demand to recover in the second half of the year ahead."
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+def test_clean_boundary_quotes_still_verify():
+    assert verify_claim(claim("Operating margin was 21.1%"), "Note: Operating margin was 21.1% for the quarter.") == "verified"
+    assert verify_claim(claim("Operating margin was 21.1%"), "Operating margin was 21.1%, down sharply.") == "verified"
+    assert verify_claim(claim("Operating margin was 21.1%"), "Operating margin was 21.1%. Next sentence.") == "verified"
+    assert verify_claim(claim("Operating margin was 21.1%"), "Headline\nOperating margin was 21.1%\nnext") == "verified"
+    assert verify_claim(claim("Operating margin was 21.1"), "Operating margin was 21.1. Next") == "verified"
+
+
+def test_later_clean_occurrence_is_enough():
+    page = "Margin was 21.17% in one place. Elsewhere operating margin was 21.1% overall."
+    assert verify_claim(claim("operating margin was 21.1"), page) == "verified"
+
+
+def test_year_on_year_hyphens_still_verify():
+    assert verify_claim(claim("year-on-year growth was strong"), "Year-on-year growth was strong in Q2") == "verified"
+
+
+def test_punctuation_only_quote_fails():
+    page = "Results ............ shown here"
+    assert verify_claim(claim("." * 12), page) == "failed"
+    assert verify_claim(claim("-" * 12), "Results ------------ shown here") == "failed"
