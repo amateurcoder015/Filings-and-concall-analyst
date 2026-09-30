@@ -9,7 +9,7 @@ def make_pages():
     return [
         Page("q2-results", 1, "results", "Q2 FY26", "Operating margin was 21.1% in the second quarter, down 40 basis points."),
         Page("q2-results", 2, "results", "Q2 FY26", "Revenue grew 3.1% in constant currency driven by financial services."),
-        Page("q2-concall", 1, "concall", "Q2 FY26", "Management said wage hikes and visa costs pressured margin this quarter."),
+        Page("q2-concall", 1, "concall", "Q2 FY26", "Management said wage hikes and visa costs pressured margins this quarter."),
         Page("ar-fy25", 1, "annual_report", "FY25", "The board recommended a final dividend of 22 rupees per share."),
     ]
 
@@ -63,3 +63,12 @@ def test_reingesting_a_doc_replaces_pages_instead_of_duplicating(index):
 def test_hit_snippet_is_single_line_and_bounded(index):
     hit = index.search("margin")[0]
     assert "\n" not in hit.snippet and len(hit.snippet) <= 300
+
+
+def test_stemming_finds_plural_and_singular_forms(index):
+    # Porter stemmer should match "margin" to "margins"
+    margin_hits = index.search("margin", doc_type="concall")
+    assert margin_hits and any(h.doc_id == "q2-concall" for h in margin_hits)
+    # And "hike" should match "hikes" in the same page
+    hike_hits = index.search("hike")
+    assert hike_hits and any(h.doc_id == "q2-concall" for h in hike_hits)

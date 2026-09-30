@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS pages (
     embedding BLOB NOT NULL,
     UNIQUE (doc_id, page_no)
 );
-CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(text);
+CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(text, tokenize = 'porter unicode61');
 """
 
 
