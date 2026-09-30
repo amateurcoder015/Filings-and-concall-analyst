@@ -13,6 +13,9 @@ MIN_QUOTE_CHARS = 12
 MIN_QUOTE_ALNUM = 8
 WEAK_THRESHOLD = 90
 MAX_REPLACE_DISTANCE = 1
+# Words shorter than this (after squashing) must match exactly: a one-letter edit on a short token is a
+# different metric, unit, currency or ticker (PAT/PBT, MW/GW, INR/IDR, TCS/TVS).
+MIN_EDIT_LETTERS = 6
 MIN_CUT_LETTERS = 3
 MAX_INSERT_DELETE = 1
 
@@ -41,17 +44,36 @@ _PROTECTED = frozenset(
     increase increased increases decrease decreased decreases up down rose rise fell fall grew growth
     declined decline higher lower above below profit profits loss losses gain gains not no never without
     nor neither cannot positive negative from to
+    hardly barely scarcely seldom rarely nothing nobody nowhere
     non un none one two three four five six seven eight nine ten eleven twelve twenty thirty forty fifty
     sixty seventy eighty ninety hundred hundreds first second third half double triple zero nil
     over under about approximately nearly almost around roughly more less than only least most exceeding
-    exceeds exceeded within between max maximum min minimum at""".split()
+    exceeds exceeded within between max maximum min minimum at
+    ebit ebita ebitda ebitdar""".split()
 )
 _PLAIN_WORD = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)*")
 _CHUNK_TRAILING = ".,;:\"'"
 # Characters that, glued to the start / end of a match, make it part of a longer figure or token.
-_BAD_BEFORE = frozenset("-($\u20b9\u20ac\u00a3/%<>~\u2248\u00b1+*\u2264\u2265")
+_BAD_BEFORE = frozenset("-($\u20b9\u20ac\u00a3/%")
+# Comparison / sign / footnote marks: they only change the meaning of a figure, so they make the match
+# unclean only when the quote starts with a digit or a currency sign.
+_BAD_BEFORE_FIGURE = frozenset("<>~\u2248\u00b1+*\u2264\u2265")
+_FIGURE_START = frozenset("$\u20b9\u20ac\u00a3")
 _BAD_AFTER = frozenset("-/")
-_NEGATING_PREFIXES = ("un", "non", "in", "im", "ir", "il", "dis", "de", "mis", "anti")
+# Prefixes that negate, oppose or re-qualify the rest of the word (profitable / unprofitable,
+# performing / nonperforming, typical / atypical, tax / pretax). Hyphens between letters are joined by
+# _normalize, so "non-performing" is "nonperforming" here.
+_NEGATING_PREFIXES = (
+    "un", "non", "in", "im", "ir", "il", "dis", "de", "mis", "anti", "under", "over", "out",
+    "a", "an", "ab", "mal", "counter", "contra", "sub", "pre", "post", "ex",
+)
+# Suffixes that negate the start of the word (worth / worthless, debt / debtfree).
+_NEGATING_SUFFIXES = ("less", "free")
+# Words where a prefix above does not negate the rest ("underlying" is not the opposite of "lying"),
+# so a quote boundary may still cut them.
+_NON_NEGATING_COMPOUNDS = frozenset(
+    "underlying undertaking undertakings understanding outstanding overall".split()
+)
 
 
 def _normalize(text: str) -> str:
@@ -67,6 +89,8 @@ def _is_clean(quote: str, page: str, start: int) -> bool:
     if start > 0:
         before = page[start - 1]
         if before.isalnum() or before in _BAD_BEFORE:
+            return False
+        if before in _BAD_BEFORE_FIGURE and (quote[0].isdigit() or quote[0] in _FIGURE_START):
             return False
         if before in ".," and quote[0].isdigit():
             return False
@@ -110,29 +134,65 @@ def _is_plain_word(chunk: str) -> bool:
     return bool(_PLAIN_WORD.fullmatch(chunk)) and chunk not in _PROTECTED and not chunk.endswith("n't")
 
 
-def _squash(words: list[str]) -> str:
+def _squash(word: str) -> str:
     # "rn" -> "m" is a classic OCR confusion, applied to both sides before comparing.
-    return "".join(words).replace("rn", "m")
+    return word.replace("rn", "m")
 
 
-def _near_identical(q_side: list[str], w_side: list[str]) -> bool:
-    x, y = _squash(q_side), _squash(w_side)
-    if Levenshtein.distance(x, y) > MAX_REPLACE_DISTANCE:
+def _negating_prefix(removed: str) -> bool:
+    """`removed` (the part of a page word left out of the quote's first word) is or starts with a prefix
+    that negates / re-qualifies the rest, or is itself a protected word ("down" + "graded")."""
+    if removed in _PROTECTED or removed in _NEGATING_PREFIXES:
+        return True
+    return any(removed.startswith(prefix) for prefix in _NEGATING_PREFIXES if len(prefix) >= 2)
+
+
+def _negating_suffix(removed: str) -> bool:
+    return removed in _PROTECTED or removed.startswith(_NEGATING_SUFFIXES)
+
+
+def _near_identical_word(x: str, y: str) -> bool:
+    if x == y:
+        return True
+    if min(len(x), len(y)) < MIN_EDIT_LETTERS or Levenshtein.distance(x, y) > MAX_REPLACE_DISTANCE:
         return False
-    # Belt and braces: never accept a pair that differs only by a negating prefix (un-, non-, dis-, ...).
+    # A one-letter negating prefix ("typical" / "atypical", "symmetric" / "asymmetric").
     for longer, shorter in ((x, y), (y, x)):
-        if longer.endswith(shorter) and longer[: len(longer) - len(shorter)] in _NEGATING_PREFIXES:
+        if longer.endswith(shorter) and _negating_prefix(longer[: len(longer) - len(shorter)]):
             return False
+    # The other party of a relationship ("employer" / "employee", "drawer" / "drawee").
+    if x[:-1] == y[:-1] and {x[-1], y[-1]} == {"r", "e"} and (x.endswith("ee") or y.endswith("ee")):
+        return False
     return True
 
 
+def _near_identical(q_side: list[str], w_side: list[str]) -> bool:
+    q_words, w_words = [_squash(w) for w in q_side], [_squash(w) for w in w_side]
+    if len(q_words) != len(w_words):
+        # Different word split ("per cent" / "percent"): the letters must be identical.
+        return "".join(q_words) == "".join(w_words)
+    # Word by word, so the single tolerated edit can never land in a short token.
+    differing = [(x, y) for x, y in zip(q_words, w_words) if x != y]
+    return len(differing) <= MAX_REPLACE_DISTANCE and all(_near_identical_word(x, y) for x, y in differing)
+
+
 def _cut_of(cut: str, full: str, *, suffix: bool) -> bool:
-    """`cut` is a proper suffix (or prefix) of `full`: the quote boundary sliced a plain word."""
-    if len(cut) < MIN_CUT_LETTERS or len(cut) >= len(full):
+    """`cut` is a proper suffix (or prefix) of `full`: the quote boundary sliced a plain word.
+
+    Refused when the sliced-off part negates what is left ("un" + "profitable", "worth" + "less").
+    """
+    # Short page words are tokens (NPA / GNPA, GNP / GNPA): never sliced.
+    if len(cut) < MIN_CUT_LETTERS or len(cut) >= len(full) or len(full) < MIN_EDIT_LETTERS:
         return False
     if not (_is_plain_word(cut) and _is_plain_word(full)):
         return False
-    return full.endswith(cut) if suffix else full.startswith(cut)
+    if suffix:
+        if not full.endswith(cut):
+            return False
+        return full in _NON_NEGATING_COMPOUNDS or not _negating_prefix(full[: len(full) - len(cut)])
+    if not full.startswith(cut):
+        return False
+    return not _negating_suffix(full[len(cut):])
 
 
 def _same_skeleton(quote: str, window: str) -> bool:

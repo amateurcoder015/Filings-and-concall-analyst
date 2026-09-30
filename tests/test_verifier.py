@@ -282,7 +282,6 @@ WEAK_PAGE = "Management said demand remained cautious and revenue grew 12% with 
     "quote, page",
     [
         ("Managment said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter.", WEAK_PAGE),
-        ("Management said deman remained cautious and revenue grew 12% with margin at 21.1% in the quarter.", WEAK_PAGE),
         ("argin was 21.1% in the quarter and revenue", "The margin was 21.1% in the quarter and revenue rose."),
         ("the margin was 21.1% in the quarter and reven", "The margin was 21.1% in the quarter and revenue rose."),
     ],
@@ -382,12 +381,27 @@ def test_expanded_protected_words_and_cut_guards_fail(quote, page):
         "Rnanagement said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter.",
         "Management said demand remained cautious and revenue grew 12% with rnargin at 21.1% in the quarter.",
         "Management said dernand remained cautious and revenue grew 12% with margin at 21.1% in the quarter.",
-        "Management said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter of this yeer.",
     ],
 )
 def test_ocr_style_typos_stay_weak(quote):
     page = "Management said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter of this year."
     assert verify_claim(claim(quote), page) == "weak"
+
+
+# Superseded by the round-4 ruling: a one-letter edit is only tolerated when both sides are >= 6 letters,
+# so these short-word typos (formerly pinned as weak) now fail.
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("Management said deman remained cautious and revenue grew 12% with margin at 21.1% in the quarter.", WEAK_PAGE),
+        (
+            "Management said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter of this yeer.",
+            "Management said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter of this year.",
+        ),
+    ],
+)
+def test_short_word_one_edit_typos_now_fail(quote, page):
+    assert verify_claim(claim(quote), page) == "failed"
 
 
 def test_one_plain_word_deleted_stays_weak():
@@ -406,3 +420,152 @@ def test_one_plain_word_deleted_stays_weak():
 )
 def test_cut_edge_words_are_not_failed(quote, page):
     assert verify_claim(claim(quote), page) in ("weak", "verified")
+
+
+# --- Fix round 4: negating affix cuts, short-token edits, glued markers ---------
+
+_FIG = " in the quarter with Rs 45 crore reported for the period ended March 2026"
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        # C1-C9, C18: the quote's first word is the page word minus a negating prefix.
+        ("profitable" + _FIG, "The unit was unprofitable" + _FIG),
+        ("likely" + _FIG, "Recovery is unlikely" + _FIG),
+        ("able" + _FIG, "The company was unable" + _FIG),
+        ("audited" + _FIG, "Results were unaudited" + _FIG),
+        ("performing" + _FIG, "Gross non-performing" + _FIG),
+        ("performing" + _FIG, "Gross nonperforming" + _FIG),
+        ("operating" + _FIG, "Income was non-operating" + _FIG),
+        ("continued" + _FIG, "The business was discontinued" + _FIG),
+        ("secured" + _FIG, "The loans were unsecured" + _FIG),
+        ("performed" + _FIG, "The segment underperformed" + _FIG),
+        ("profitable in the quarter with Rs 45 crore", "The unit was unprofitable in the quarter with Rs 45 crore"),
+        # Siblings: other negating / opposing / metric-changing prefixes.
+        ("typical" + _FIG, "The result was atypical" + _FIG),
+        ("normal" + _FIG, "The result was abnormal" + _FIG),
+        ("standard" + _FIG, "The asset was substandard" + _FIG),
+        ("valued" + _FIG, "The stock was undervalued" + _FIG),
+        ("stated" + _FIG, "Profit was overstated" + _FIG),
+        ("flow" + _FIG, "There was a cash outflow" + _FIG),
+        ("graded" + _FIG, "The rating was downgraded" + _FIG),
+        ("tax profit" + _FIG, "The pre-tax profit" + _FIG),
+        ("tax profit" + _FIG, "The post-tax profit" + _FIG),
+        ("functioning" + _FIG, "The plant was malfunctioning" + _FIG),
+        ("rest" + _FIG, "Net interest" + _FIG),
+    ],
+)
+def test_round4_negating_prefix_cut_fails(quote, page):
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        # C10: the quote's last word is the page word minus a negating suffix.
+        ("The shares held with Rs 45 crore of cover were worth", "The shares held with Rs 45 crore of cover were worthless today."),
+        ("The company with Rs 45 crore of cash is now debt", "The company with Rs 45 crore of cash is now debt-free overall."),
+    ],
+)
+def test_round4_negating_suffix_cut_fails(quote, page):
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+def _metric_sentence(token):
+    return f"The reported {token} of Rs 45 crore for the full year was in line with the guidance given."
+
+
+@pytest.mark.parametrize(
+    "quote_token, page_token",
+    [
+        ("PAT", "PBT"),
+        ("GNPA", "NNPA"),
+        ("FY 26", "CY 26"),
+        ("MW", "GW"),
+        ("kWh", "MWh"),
+        ("mt", "kt"),
+        ("INR", "IDR"),
+        ("TCS", "TVS"),
+        # Siblings: 5-letter metric / currency word and one-letter-off tickers.
+        ("EBITA", "EBITDA"),
+        ("rupee", "rupees"),
+        ("GST", "GSP"),
+        ("CASA", "CASH"),
+        ("NSE", "BSE"),
+        # One edit hidden in a short word that OCR glued to a longer one.
+        ("PBTmargin", "PAT margin"),
+    ],
+)
+@pytest.mark.parametrize("swap", [False, True])
+def test_round4_short_token_one_edit_fails(quote_token, page_token, swap):
+    a, b = (page_token, quote_token) if swap else (quote_token, page_token)
+    assert verify_claim(claim(_metric_sentence(a)), _metric_sentence(b)) == "failed"
+
+
+@pytest.mark.parametrize(
+    "quote_word, page_word",
+    [
+        ("typical", "atypical"),
+        ("symmetric", "asymmetric"),
+        ("employer", "employee"),
+        ("drawer", "drawee"),
+    ],
+)
+@pytest.mark.parametrize("swap", [False, True])
+def test_round4_one_edit_long_word_flips_fail(quote_word, page_word, swap):
+    a, b = (page_word, quote_word) if swap else (quote_word, page_word)
+    assert verify_claim(claim(_sentence(a)), _sentence(b)) == "failed"
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("Revenue grew 12% this quarter", "*Revenue grew 12% this quarter"),
+        ("Revenue grew 12% this quarter", "+Revenue grew 12% this quarter"),
+        ("Revenue grew 12% this quarter", "~Revenue grew 12% this quarter"),
+    ],
+)
+def test_round4_glued_marker_before_letter_quote_verifies(quote, page):
+    assert verify_claim(claim(quote), page) == "verified"
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("5% versus last year", "+5% versus last year"),
+        ("5% versus last year", "*5% versus last year"),
+        ("$5 million versus last year", "~$5 million versus last year"),
+        ("₹5 crore versus last year", "≥₹5 crore versus last year"),
+    ],
+)
+def test_round4_glued_marker_before_figure_quote_fails(quote, page):
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "Management said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter of this year.".replace("Management", "Managemant"),
+        "Management said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter of this year.".replace("remained", "remaind"),
+        "Management said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter of this year.".replace("cautious", "cautlous"),
+    ],
+)
+def test_round4_long_word_typos_stay_weak(quote):
+    page = "Management said demand remained cautious and revenue grew 12% with margin at 21.1% in the quarter of this year."
+    assert verify_claim(claim(quote), page) == "weak"
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        # A quote boundary cutting a short token (or an EBITDA-family acronym) turns it into another metric.
+        ("NPA" + _FIG, "The GNPA" + _FIG),
+        ("NPA" + _FIG, "The NNPA" + _FIG),
+        ("The reported ratio with Rs 45 crore was GNP", "The reported ratio with Rs 45 crore was GNPA overall."),
+        ("The reported margin with Rs 45 crore was EBIT", "The reported margin with Rs 45 crore was EBITDA overall."),
+        ("BITDA" + _FIG, "The EBITDA" + _FIG),
+    ],
+)
+def test_round4_cut_short_token_fails(quote, page):
+    assert verify_claim(claim(quote), page) == "failed"
