@@ -126,3 +126,81 @@ def test_period_and_company_are_in_the_system_prompt(index):
     system = client.calls[0]["system"]
     assert "Infosys" in system and "Q2 FY26" in system
     assert client.calls[0]["model"] == "test-model"
+
+
+CUT_OFF = "Your last reply was cut off. Be brief: use at most 3 claims with short verbatim quotes (one sentence each), then call submit_answer."
+
+
+def truncated(*blocks):
+    r = response(*blocks)
+    r.stop_reason = "max_tokens"
+    return r
+
+
+def test_max_tokens_constant_is_4096(index):
+    agent, client = make_agent(index, [submit(not_found=True)])
+    agent.ask("q")
+    assert client.calls[0]["max_tokens"] == 4096
+
+
+def test_truncated_reply_is_dropped_and_model_is_asked_to_be_brief(index):
+    partial = truncated(tool_use("submit_answer", {"summary": "cut", "claims": [{"text": "x"}]}, id="p"))
+    agent, client = make_agent(index, [partial, submit([GOOD_CLAIM])])
+    answer = agent.ask("q")
+    assert len(answer.claims) == 1
+    msgs = client.calls[1]["messages"]
+    assert msgs[-1] == {"role": "user", "content": CUT_OFF}
+    assert all(m["role"] != "assistant" for m in msgs)
+
+
+def test_repeated_truncation_hits_step_cap(index):
+    script = [truncated(text("...")) for _ in range(MAX_STEPS + 2)]
+    agent, client = make_agent(index, script)
+    answer = agent.ask("q")
+    assert answer.not_found is True
+    assert len(client.calls) == MAX_STEPS
+
+
+def test_read_page_output_is_wrapped_and_prompt_marks_content_untrusted(index):
+    agent, client = make_agent(
+        index, [response(tool_use("read_page", {"doc_id": "q2-results", "page_no": 1}, id="a")), submit(not_found=True)]
+    )
+    agent.ask("q")
+    content = client.calls[1]["messages"][-1]["content"][0]["content"]
+    assert content.startswith("<page ") and content.rstrip().endswith("</page>")
+    assert MARGIN_PAGE in content
+    assert "untrusted" in client.calls[0]["system"]
+
+
+def test_empty_assistant_content_is_not_appended(index):
+    agent, client = make_agent(index, [response(), submit([GOOD_CLAIM])])
+    assert len(agent.ask("q").claims) == 1
+    msgs = client.calls[1]["messages"]
+    assert all(m["role"] != "assistant" for m in msgs)
+    assert msgs[-1] == {"role": "user", "content": "Finish by calling the submit_answer tool with your answer."}
+
+
+def test_non_string_search_filters_return_error(index):
+    agent, client = make_agent(
+        index,
+        [response(tool_use("search", {"query": "margin", "period": 5, "doc_type": ["x"]}, id="a")), submit(not_found=True)],
+    )
+    agent.ask("q")
+    r = client.calls[1]["messages"][-1]["content"][0]
+    assert r["is_error"] is True and "must be strings" in r["content"]
+
+
+def test_non_dict_tool_args_return_error(index):
+    agent, client = make_agent(
+        index,
+        [
+            response(
+                tool_use("search", "margin", id="a"),
+                tool_use("read_page", None, id="b"),
+            ),
+            submit(not_found=True),
+        ],
+    )
+    agent.ask("q")
+    results = client.calls[1]["messages"][-1]["content"]
+    assert len(results) == 2 and all(r["is_error"] for r in results)
