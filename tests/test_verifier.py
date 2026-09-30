@@ -569,3 +569,57 @@ def test_round4_long_word_typos_stay_weak(quote):
 )
 def test_round4_cut_short_token_fails(quote, page):
     assert verify_claim(claim(quote), page) == "failed"
+
+
+# --- Fix round 5: letter currency codes, more prefixes, direction verbs --------
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("Rs 5 crore of revenue in the quarter", "Other income was <Rs 5 crore of revenue in the quarter"),
+        ("Rs 5 crore of revenue in the quarter", "Other income was ~Rs 5 crore of revenue in the quarter"),
+        ("USD 5 million of revenue in the quarter", "Deal value was >USD 5 million of revenue in the quarter"),
+        ("INR 5 crore of revenue in the quarter", "Deal value was ≥INR 5 crore of revenue in the quarter"),
+        ("Re 1 per share was declared as dividend", "Payout was <Re 1 per share was declared as dividend"),
+        ("5% versus last year", "+5% versus last year"),
+    ],
+)
+def test_round5_mark_before_letter_currency_figure_fails(quote, page):
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+def test_round5_glued_asterisk_before_word_still_verifies():
+    assert verify_claim(claim("*Revenue grew 12% this quarter"), "*Revenue grew 12% this quarter") == "verified"
+    assert verify_claim(claim("Revenue grew 12% this quarter"), "*Revenue grew 12% this quarter") == "verified"
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("tax profit of Rs 500 crore in the quarter", "The after-tax profit of Rs 500 crore in the quarter"),
+        ("tax profit of Rs 500 crore in the quarter", "The before-tax profit of Rs 500 crore in the quarter"),
+        ("annual dividend of Rs 20 per share was paid", "The semiannual dividend of Rs 20 per share was paid"),
+        ("annual dividend of Rs 20 per share was paid", "The biannual dividend of Rs 20 per share was paid"),
+        ("watts of capacity added in the year 2026", "The megawatts of capacity added in the year 2026"),
+    ],
+)
+def test_round5_more_prefix_cuts_fail(quote, page):
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+@pytest.mark.parametrize(
+    "quote, page",
+    [
+        ("margins soared in the quarter", "margins soured in the quarter"),
+        ("margins improved to 21.1% in the quarter", "margins improves to 21.1% in the quarter"),
+    ],
+)
+def test_round5_direction_verb_changes_fail(quote, page):
+    assert verify_claim(claim(quote), page) == "failed"
+
+
+@pytest.mark.parametrize("verb", ["soared", "slumped", "improved", "widened", "narrowed", "contracted", "eased"])
+def test_round5_direction_verbs_identical_text_verifies(verb):
+    text = f"Operating margins {verb} to 21.1% in the quarter"
+    assert verify_claim(claim(text), f"Note: {text}.") == "verified"

@@ -49,7 +49,11 @@ _PROTECTED = frozenset(
     sixty seventy eighty ninety hundred hundreds first second third half double triple zero nil
     over under about approximately nearly almost around roughly more less than only least most exceeding
     exceeds exceeded within between max maximum min minimum at
-    ebit ebita ebitda ebitdar""".split()
+    ebit ebita ebitda ebitdar
+    soared soar soars soured sour surged surge slumped slump plunged plunge jumped jump climbed climb
+    dropped drop tumbled tumble slipped slip improved improve worsened worsen widened widen narrowed narrow
+    expanded expand contracted contract strengthened weakened rallied slid sank dipped eased tightened
+    loosened""".split()
 )
 _PLAIN_WORD = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)*")
 _CHUNK_TRAILING = ".,;:\"'"
@@ -66,6 +70,7 @@ _BAD_AFTER = frozenset("-/")
 _NEGATING_PREFIXES = (
     "un", "non", "in", "im", "ir", "il", "dis", "de", "mis", "anti", "under", "over", "out",
     "a", "an", "ab", "mal", "counter", "contra", "sub", "pre", "post", "ex",
+    "after", "before", "semi", "bi", "mega", "kilo", "giga", "milli", "micro",
 )
 # Suffixes that negate the start of the word (worth / worthless, debt / debtfree).
 _NEGATING_SUFFIXES = ("less", "free")
@@ -84,13 +89,21 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _figure_led(quote: str) -> bool:
+    """The quote opens with a figure: a digit or currency sign, or a digit within its first two chunks
+    ("Rs 5", "USD 5", "INR 5", "Re 1", "Rs. 5")."""
+    if quote[0].isdigit() or quote[0] in _FIGURE_START:
+        return True
+    return any(ch.isdigit() for chunk in quote.split()[:2] for ch in chunk)
+
+
 def _is_clean(quote: str, page: str, start: int) -> bool:
     end = start + len(quote)
     if start > 0:
         before = page[start - 1]
         if before.isalnum() or before in _BAD_BEFORE:
             return False
-        if before in _BAD_BEFORE_FIGURE and (quote[0].isdigit() or quote[0] in _FIGURE_START):
+        if before in _BAD_BEFORE_FIGURE and _figure_led(quote):
             return False
         if before in ".," and quote[0].isdigit():
             return False
