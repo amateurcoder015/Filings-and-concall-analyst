@@ -13,7 +13,10 @@ def run_ingest(directory: Path, index: PageIndex) -> dict[str, int]:
     _, docs = load_manifest(directory)
     counts: dict[str, int] = {}
     for meta in docs:
-        pages = ingest_pdf(Path(directory) / meta.file, meta)
+        try:
+            pages = ingest_pdf(Path(directory) / meta.file, meta)
+        except Exception as exc:
+            raise ManifestError(f"cannot read {meta.file}: {exc}") from exc
         index.add_pages(pages)
         counts[meta.doc_id] = len(pages)
         flagged = sum(1 for p in pages if p.low_confidence)
@@ -27,9 +30,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("directory", nargs="?", default=str(config.DATA_DIR))
     args = parser.parse_args(argv)
 
-    from backend.index.embedder import LocalEmbedder
-
     try:
+        # Load manifest first to fail fast on bad manifests before loading embedder
+        load_manifest(Path(args.directory))
+
+        from backend.index.embedder import LocalEmbedder
+
         index = PageIndex(config.DB_PATH, LocalEmbedder())
         print(f"Ingesting {args.directory}")
         counts = run_ingest(Path(args.directory), index)
