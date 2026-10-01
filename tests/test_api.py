@@ -127,3 +127,42 @@ def test_not_found_answer_summary_is_supported(index, pdf_dir):
     answer = Answer(summary="This is not in the loaded filings.", claims=[], not_found=True)
     body = client_for(index, pdf_dir, FakeAgent(answer=answer)).post("/ask", json={"question": "q"}).json()
     assert body["summary_supported"] is True
+
+
+def test_unknown_period_is_rejected_without_calling_the_model(index, pdf_dir):
+    agent = FakeAgent(answer=good_answer())
+    response = client_for(index, pdf_dir, agent).post("/ask", json={"question": "q", "period": "Q9 FY99"})
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Unknown period."}
+    assert agent.calls == []
+
+
+def test_known_and_missing_period_are_accepted(index, pdf_dir):
+    agent = FakeAgent(answer=good_answer())
+    c = client_for(index, pdf_dir, agent)
+    assert c.post("/ask", json={"question": "q", "period": "Q2 FY26"}).status_code == 200
+    assert c.post("/ask", json={"question": "q", "period": None}).status_code == 200
+    assert c.post("/ask", json={"question": "q"}).status_code == 200
+
+
+def test_overlong_period_is_rejected(index, pdf_dir):
+    agent = FakeAgent(answer=good_answer())
+    response = client_for(index, pdf_dir, agent).post("/ask", json={"question": "q", "period": "x" * 33})
+    assert response.status_code == 422 and agent.calls == []
+
+
+def test_unexpected_error_becomes_json_500(index, pdf_dir, caplog):
+    agent = FakeAgent(error=RuntimeError("secret internals"))
+    c = TestClient(create_app(index, agent, DOCS, "Infosys", pdf_dir), raise_server_exceptions=False)
+    with caplog.at_level("ERROR"):
+        response = c.post("/ask", json={"question": "q"})
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal error while answering. Check the server log."}
+    assert "secret internals" in caplog.text
+
+
+def test_pdf_endpoint_404s_when_file_is_missing_on_disk(index, tmp_path):
+    c = client_for(index, tmp_path, FakeAgent())
+    response = c.get("/pdf/q2-results")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "PDF file is missing on the server."}

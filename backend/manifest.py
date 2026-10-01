@@ -22,13 +22,21 @@ def load_manifest(directory: Path) -> tuple[str, list[DocMeta]]:
     except json.JSONDecodeError as exc:
         raise ManifestError(f"manifest.json is not valid JSON: {exc}") from exc
 
+    if not isinstance(data, dict):
+        raise ManifestError("manifest.json must be a JSON object with 'company' and 'documents'")
+
     company = data.get("company")
     if not company:
         raise ManifestError("manifest.json needs a 'company' field")
 
     docs: list[DocMeta] = []
     seen: set[str] = set()
-    for entry in data.get("documents", []):
+    entries = data.get("documents", [])
+    if not isinstance(entries, list):
+        raise ManifestError("manifest.json 'documents' must be a list of document entries")
+    for position, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            raise ManifestError(f"document entry {position} must be an object, got: {entry!r}")
         for key in REQUIRED_FIELDS:
             if key not in entry:
                 raise ManifestError(f"document entry is missing '{key}': {entry}")

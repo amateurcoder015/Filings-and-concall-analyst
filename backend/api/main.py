@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from backend.agent.agent import AgentError
@@ -19,7 +20,7 @@ DISCLAIMER = (
 
 class AskRequest(BaseModel):
     question: str = Field(max_length=1000)
-    period: Optional[str] = None
+    period: Optional[str] = Field(default=None, max_length=32)
 
 
 def create_app(index, agent, docs: list[DocMeta], company: str, pdf_dir: Path) -> FastAPI:
@@ -31,6 +32,14 @@ def create_app(index, agent, docs: list[DocMeta], company: str, pdf_dir: Path) -
         allow_headers=["*"],
     )
     by_id = {d.doc_id: d for d in docs}
+    periods = {d.period for d in docs}
+
+    @app.exception_handler(Exception)
+    async def internal_error(request: Request, exc: Exception):
+        logging.exception("Unhandled error while serving %s", request.url.path, exc_info=exc)
+        return JSONResponse(
+            status_code=500, content={"detail": "Internal error while answering. Check the server log."}
+        )
 
     @app.get("/health")
     def health():
@@ -58,6 +67,8 @@ def create_app(index, agent, docs: list[DocMeta], company: str, pdf_dir: Path) -
         question = request.question.strip()
         if not question:
             raise HTTPException(status_code=422, detail="Question must not be empty.")
+        if request.period is not None and request.period not in periods:
+            raise HTTPException(status_code=422, detail="Unknown period.")
         try:
             answer = agent.ask(question, period=request.period)
         except AgentError as exc:
@@ -98,6 +109,9 @@ def create_app(index, agent, docs: list[DocMeta], company: str, pdf_dir: Path) -
         meta = by_id.get(doc_id)
         if meta is None:
             raise HTTPException(status_code=404, detail="No such document.")
-        return FileResponse(Path(pdf_dir) / meta.file, media_type="application/pdf")
+        path = Path(pdf_dir) / meta.file
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="PDF file is missing on the server.")
+        return FileResponse(path, media_type="application/pdf")
 
     return app

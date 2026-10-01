@@ -63,3 +63,24 @@ def test_invalid_json_rejected(tmp_path):
     (tmp_path / "manifest.json").write_text("{not json")
     with pytest.raises(ManifestError, match="not valid JSON"):
         load_manifest(tmp_path)
+
+
+@pytest.mark.parametrize("payload", ["[]", "5", '"text"', "null"])
+def test_non_object_manifest_rejected(tmp_path, payload):
+    (tmp_path / "manifest.json").write_text(payload)
+    with pytest.raises(ManifestError, match="must be a JSON object"):
+        load_manifest(tmp_path)
+
+
+@pytest.mark.parametrize("documents", [{"file": "a.pdf"}, "a.pdf", 5])
+def test_non_list_documents_rejected(tmp_path, documents):
+    (tmp_path / "manifest.json").write_text(json.dumps({"company": "Infosys", "documents": documents}))
+    with pytest.raises(ManifestError, match="'documents' must be a list"):
+        load_manifest(tmp_path)
+
+
+@pytest.mark.parametrize("item", ["a.pdf", 5, None, ["a.pdf"]])
+def test_non_object_document_entry_rejected(tmp_path, item):
+    (tmp_path / "manifest.json").write_text(json.dumps({"company": "Infosys", "documents": [item]}))
+    with pytest.raises(ManifestError, match="document entry 1 must be an object"):
+        load_manifest(tmp_path)
