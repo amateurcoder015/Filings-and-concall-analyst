@@ -19,10 +19,22 @@ TOOLS = [
     },
     {
         "name": "read_page",
-        "description": "Read the full text of one page. Always read a page before quoting from it.",
+        "description": (
+            "Read the text of one page. Always read a page before quoting from it. Long pages are returned "
+            "in slices of 12000 characters; when a slice is cut, a marker gives the offset to pass to read "
+            "the next slice."
+        ),
         "input_schema": {
             "type": "object",
-            "properties": {"doc_id": {"type": "string"}, "page_no": {"type": "integer"}},
+            "properties": {
+                "doc_id": {"type": "string"},
+                "page_no": {"type": "integer"},
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Character offset to start reading from on long pages (default 0).",
+                },
+            },
             "required": ["doc_id", "page_no"],
         },
     },

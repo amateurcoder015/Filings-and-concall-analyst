@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import re
+import time
+
 from backend.agent.tools import TOOLS, build_system_prompt
 from backend.models import Answer, Claim
 
 MAX_STEPS = 8
 MAX_TOKENS = 4096
-MAX_PAGE_CHARS = 8000
+MAX_PAGE_CHARS = 12000
+MAX_QUOTE_CHARS = 1000
+ASK_DEADLINE_SECONDS = 180
+# HTTP statuses worth one retry: timeout, conflict, rate limit, server errors, overload.
+TRANSIENT_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504, 529})
+_PAGE_CLOSE = re.compile(r"</page>", re.IGNORECASE)
 NOT_FOUND_TEXT = "This is not in the loaded filings."
 NUDGE_TEXT = "Finish by calling the submit_answer tool with your answer."
 CUT_OFF_TEXT = (
@@ -43,6 +51,11 @@ def parse_answer(data: dict) -> Answer | str:
             return f"Claim {position} is malformed: each needs text, doc_id, page_no (integer) and quote."
         if not claim.text or not claim.quote:
             return f"Claim {position} has an empty text or quote; every claim needs a verbatim quote."
+        if len(claim.quote) > MAX_QUOTE_CHARS:
+            return (
+                f"Claim {position} has a quote longer than {MAX_QUOTE_CHARS} characters. Use a shorter verbatim "
+                "quote: the one or two sentences that contain the figures you rely on."
+            )
         claims.append(claim)
     return Answer(summary=summary, claims=claims, not_found=False)
 
@@ -58,7 +71,10 @@ class FilingsAgent:
         system = build_system_prompt(self._company, period)
         messages: list[dict] = [{"role": "user", "content": question}]
         rejected = 0
+        deadline = time.monotonic() + ASK_DEADLINE_SECONDS
         for _ in range(MAX_STEPS):
+            if time.monotonic() > deadline:
+                return Answer(summary=GIVE_UP_TEXT, claims=[], not_found=True)
             response = self._create(system, messages)
             if getattr(response, "stop_reason", None) == "max_tokens":
                 # cut off mid-reply: any tool_use block may be incomplete, so drop the turn entirely
@@ -97,8 +113,7 @@ class FilingsAgent:
         return Answer(summary=GIVE_UP_TEXT, claims=[], not_found=True)
 
     def _create(self, system: str, messages: list[dict]):
-        last_error: Exception | None = None
-        for _ in range(2):
+        for attempt in range(2):
             try:
                 return self._client.messages.create(
                     model=self._model,
@@ -107,9 +122,13 @@ class FilingsAgent:
                     tools=TOOLS,
                     messages=messages,
                 )
-            except Exception as exc:  # network, rate limit, overload: retry once, then surface
-                last_error = exc
-        raise AgentError(f"Claude API call failed: {last_error}") from last_error
+            except Exception as exc:
+                # Only network trouble, rate limits and overload get one retry; a bad request or key never
+                # succeeds on a second try.
+                if attempt == 0 and _is_transient(exc):
+                    continue
+                raise AgentError(f"Claude API call failed: {exc}") from exc
+        raise AssertionError("unreachable")
 
     def _run_tool(self, name: str, args: dict) -> tuple[str, bool]:
         if not isinstance(args, dict):
@@ -129,13 +148,41 @@ class FilingsAgent:
             lines = [f"{h.doc_id} p.{h.page_no} [{h.doc_type} {h.period}] {h.snippet}" for h in hits]
             return "\n".join(lines), False
         if name == "read_page":
-            try:
-                page = self._index.get_page(str(args["doc_id"]), int(args["page_no"]))
-            except (KeyError, TypeError, ValueError):
-                return "read_page needs doc_id and an integer page_no.", True
-            if page is None:
-                return "No such page.", True
-            note = "[low-confidence page: text may be incomplete or OCR noise]\n" if page.low_confidence else ""
-            body = page.text[:MAX_PAGE_CHARS]
-            return f'{note}<page doc_id="{page.doc_id}" page_no="{page.page_no}">\n{body}\n</page>', False
+            return self._read_page(args)
         return f"Unknown tool '{name}'.", True
+
+    def _read_page(self, args: dict) -> tuple[str, bool]:
+        try:
+            page = self._index.get_page(str(args["doc_id"]), int(args["page_no"]))
+        except (KeyError, TypeError, ValueError):
+            return "read_page needs doc_id and an integer page_no.", True
+        offset = args.get("offset", 0)
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            return "read_page offset must be a non-negative integer.", True
+        if page is None:
+            return "No such page.", True
+        note = "[low-confidence page: text may be incomplete or OCR noise]\n" if page.low_confidence else ""
+        total = len(page.text)
+        if offset > 0 and offset >= total:
+            body = "[end of page]"
+        else:
+            end = min(offset + MAX_PAGE_CHARS, total)
+            body = page.text[offset:end]
+            if end < total:
+                body += (
+                    f"\n[page truncated: showing characters {offset}-{end} of {total}; "
+                    f"call read_page with offset={end} to continue]"
+                )
+        # Page text must not be able to close the wrapper and pose as instructions outside it.
+        body = _PAGE_CLOSE.sub(r"<\\/page>", body)
+        return f'{note}<page doc_id="{page.doc_id}" page_no="{page.page_no}">\n{body}\n</page>', False
+
+
+def _is_transient(exc: Exception) -> bool:
+    if getattr(exc, "status_code", None) in TRANSIENT_STATUS_CODES:
+        return True
+    try:
+        import anthropic
+    except ImportError:
+        return False
+    return isinstance(exc, (anthropic.APIConnectionError, anthropic.APITimeoutError))
