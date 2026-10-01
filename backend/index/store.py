@@ -56,23 +56,62 @@ class PageIndex:
                     if row:
                         self._db.execute("DELETE FROM pages_fts WHERE rowid = ?", (row[0],))
                         self._db.execute("DELETE FROM pages WHERE id = ?", (row[0],))
-                    cursor = self._db.execute(
-                        "INSERT INTO pages (doc_id, page_no, doc_type, period, text, low_confidence, embedding)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            page.doc_id,
-                            page.page_no,
-                            page.doc_type,
-                            page.period,
-                            page.text,
-                            int(page.low_confidence),
-                            np.asarray(vector, dtype=np.float32).tobytes(),
-                        ),
-                    )
-                    self._db.execute(
-                        "INSERT INTO pages_fts (rowid, text) VALUES (?, ?)",
-                        (cursor.lastrowid, page.text),
-                    )
+                    self._insert(page, vector)
+
+    def replace_document(self, doc_id: str, pages: list[Page]) -> None:
+        """Replace every page of `doc_id` with `pages`, so no page of an older version survives."""
+        if any(page.doc_id != doc_id for page in pages):
+            raise ValueError(f"replace_document({doc_id!r}) got pages of another document")
+        vectors = self._embedder.embed([p.text for p in pages]) if pages else []
+        with self._lock:
+            with self._db:
+                self._delete_doc(doc_id)
+                for page, vector in zip(pages, vectors):
+                    self._insert(page, vector)
+
+    def prune_documents(self, keep_doc_ids: set[str]) -> None:
+        """Delete every document whose doc_id is not in `keep_doc_ids`."""
+        with self._lock:
+            with self._db:
+                stored = [r[0] for r in self._db.execute("SELECT DISTINCT doc_id FROM pages").fetchall()]
+                for doc_id in stored:
+                    if doc_id not in keep_doc_ids:
+                        self._delete_doc(doc_id)
+
+    def doc_ids(self) -> set[str]:
+        with self._lock:
+            return {r[0] for r in self._db.execute("SELECT DISTINCT doc_id FROM pages").fetchall()}
+
+    def fts_row_count(self) -> int:
+        with self._lock:
+            return self._db.execute("SELECT COUNT(*) FROM pages_fts").fetchone()[0]
+
+    def _delete_doc(self, doc_id: str) -> None:
+        # Caller holds the lock and the transaction.
+        self._db.execute(
+            "DELETE FROM pages_fts WHERE rowid IN (SELECT id FROM pages WHERE doc_id = ?)", (doc_id,)
+        )
+        self._db.execute("DELETE FROM pages WHERE doc_id = ?", (doc_id,))
+
+    def _insert(self, page: Page, vector) -> None:
+        # Caller holds the lock and the transaction.
+        cursor = self._db.execute(
+            "INSERT INTO pages (doc_id, page_no, doc_type, period, text, low_confidence, embedding)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                page.doc_id,
+                page.page_no,
+                page.doc_type,
+                page.period,
+                page.text,
+                int(page.low_confidence),
+                np.asarray(vector, dtype=np.float32).tobytes(),
+            ),
+        )
+        self._db.execute(
+            "INSERT INTO pages_fts (rowid, text) VALUES (?, ?)",
+            (cursor.lastrowid, page.text),
+        )
 
     def get_page(self, doc_id: str, page_no: int) -> Page | None:
         with self._lock:

@@ -15,5 +15,11 @@ def build_components():
     index = PageIndex(config.DB_PATH, LocalEmbedder())
     if not index.page_counts():
         raise RuntimeError("The index is empty. Run: python -m backend.ingest.cli")
+    stale = index.doc_ids() - {d.doc_id for d in docs}
+    if stale:
+        raise RuntimeError(
+            f"The index holds documents that are not in manifest.json ({', '.join(sorted(stale))}). "
+            "Re-run: python -m backend.ingest.cli"
+        )
     agent = FilingsAgent(anthropic.Anthropic(), index, model=config.MODEL, company=company)
     return company, docs, index, agent

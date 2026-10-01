@@ -119,3 +119,36 @@ def test_concurrent_search_and_ingest(tmp_path):
 
     # Verify final state
     assert index.page_counts() == {"q2-results": 2, "q2-concall": 1, "ar-fy25": 1}
+
+
+def three_page_doc():
+    return [
+        Page("ar", 1, "annual_report", "FY25", "Chairman letter on strategy and talent."),
+        Page("ar", 2, "annual_report", "FY25", "Segment revenue table for financial services."),
+        Page("ar", 3, "annual_report", "FY25", "Obsolete zebra paragraph about legacy subsidiaries."),
+    ]
+
+
+def test_replace_document_drops_pages_missing_from_new_version(index):
+    index.replace_document("ar", three_page_doc())
+    index.replace_document("ar", three_page_doc()[:2])
+    assert index.page_counts()["ar"] == 2
+    assert index.get_page("ar", 3) is None
+    assert all(not (h.doc_id == "ar" and h.page_no == 3) for h in index.search("zebra legacy subsidiaries"))
+    assert index.fts_row_count() == sum(index.page_counts().values())
+    # other documents are untouched
+    assert index.page_counts()["q2-results"] == 2
+
+
+def test_replace_document_keeps_fts_in_step_with_pages(index):
+    for _ in range(3):
+        index.replace_document("ar", three_page_doc())
+    assert index.fts_row_count() == sum(index.page_counts().values()) == 7
+
+
+def test_prune_documents_removes_docs_not_kept(index):
+    index.prune_documents({"q2-results", "q2-concall"})
+    assert set(index.page_counts()) == {"q2-results", "q2-concall"}
+    assert index.get_page("ar-fy25", 1) is None
+    assert index.search("dividend rupees per share", doc_type="annual_report") == []
+    assert index.fts_row_count() == sum(index.page_counts().values())

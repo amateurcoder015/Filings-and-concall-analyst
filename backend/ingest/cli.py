@@ -17,11 +17,13 @@ def run_ingest(directory: Path, index: PageIndex) -> dict[str, int]:
             pages = ingest_pdf(Path(directory) / meta.file, meta)
         except Exception as exc:
             raise ManifestError(f"cannot read {meta.file}: {exc}") from exc
-        index.add_pages(pages)
+        index.replace_document(meta.doc_id, pages)
         counts[meta.doc_id] = len(pages)
         flagged = sum(1 for p in pages if p.low_confidence)
         note = f" ({flagged} low-confidence)" if flagged else ""
         print(f"  {meta.doc_id}: {len(pages)} pages{note}")
+    # Documents no longer in the manifest (removed or renamed files) must not stay searchable.
+    index.prune_documents({meta.doc_id for meta in docs})
     return counts
 
 

@@ -121,3 +121,43 @@ def test_run_ingest_is_idempotent(tmp_path):
 
     assert counts1 == counts2
     assert index.page_counts() == counts1
+
+
+def write_manifest(tmp_path, files):
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "company": "Infosys",
+                "documents": [
+                    {"file": f, "doc_type": "results", "period": "Q2 FY26", "title": f} for f in files
+                ],
+            }
+        )
+    )
+
+
+def test_reingest_with_shorter_pdf_drops_old_pages(tmp_path):
+    make_pdf(tmp_path / "q2-results.pdf", ["Operating margin was 21.1% this quarter.", "Revenue grew 3.1% this quarter.", "Obsolete zebra paragraph about subsidiaries."])
+    write_manifest(tmp_path, ["q2-results.pdf"])
+    index = PageIndex(":memory:", HashingEmbedder())
+    run_ingest(tmp_path, index)
+    assert index.page_counts() == {"q2-results": 3}
+
+    make_pdf(tmp_path / "q2-results.pdf", ["Operating margin was 21.1% this quarter.", "Revenue grew 3.1% this quarter."])
+    run_ingest(tmp_path, index)
+    assert index.page_counts() == {"q2-results": 2}
+    assert index.get_page("q2-results", 3) is None
+    assert all(h.page_no != 3 for h in index.search("zebra subsidiaries"))
+
+
+def test_reingest_after_rename_prunes_old_doc_id(tmp_path):
+    make_pdf(tmp_path / "old-name.pdf", ["Operating margin was 21.1% this quarter."])
+    write_manifest(tmp_path, ["old-name.pdf"])
+    index = PageIndex(":memory:", HashingEmbedder())
+    run_ingest(tmp_path, index)
+
+    (tmp_path / "old-name.pdf").rename(tmp_path / "new-name.pdf")
+    write_manifest(tmp_path, ["new-name.pdf"])
+    run_ingest(tmp_path, index)
+    assert index.page_counts() == {"new-name": 1}
+    assert index.get_page("old-name", 1) is None
