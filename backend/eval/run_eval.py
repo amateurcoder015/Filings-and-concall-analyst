@@ -15,6 +15,9 @@ class EvalResult:
     total: int = 0
     correct: int = 0
     citations_clean: int = 0
+    weak_claims: int = 0
+    unsupported_claims: int = 0
+    failed_claims: int = 0
     failures: list[str] = field(default_factory=list)
 
     @property
@@ -22,9 +25,14 @@ class EvalResult:
         return self.correct / self.total if self.total else 0.0
 
 
+def _verified(answer: VerifiedAnswer):
+    return [v for v in answer.claims if v.status == "verified"]
+
+
 def _haystack(answer: VerifiedAnswer) -> str:
-    parts = [answer.summary]
-    for verified in answer.claims:
+    # Only verified claims count: the model-written summary and unchecked claims prove nothing.
+    parts: list[str] = []
+    for verified in _verified(answer):
         parts += [verified.claim.text, verified.claim.quote]
     return "\n".join(parts).casefold()
 
@@ -35,21 +43,47 @@ def _is_correct(case: dict, answer: VerifiedAnswer) -> bool:
     if answer.not_found:
         return False
     haystack = _haystack(answer)
-    return all(expected.casefold() in haystack for expected in case.get("expect_contains", []))
+    if not all(expected.casefold() in haystack for expected in case.get("expect_contains", [])):
+        return False
+    cited = {(v.claim.doc_id, v.claim.page_no) for v in _verified(answer)}
+    return all((page["doc_id"], page["page_no"]) in cited for page in case.get("expect_pages", []))
+
+
+def _validate(case: dict) -> None:
+    question = case.get("question")
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError(f"case needs a non-empty question: {case}")
+    # Vacuous pass guard: factual cases must have expect_contains
+    if not case.get("expect_not_found") and not case.get("expect_contains"):
+        raise ValueError(f"factual case needs expect_contains: {question}")
+    pages = case.get("expect_pages", [])
+    if not isinstance(pages, list):
+        raise ValueError(f"expect_pages must be a list: {question}")
+    for page in pages:
+        if not (
+            isinstance(page, dict)
+            and isinstance(page.get("doc_id"), str)
+            and isinstance(page.get("page_no"), int)
+            and not isinstance(page.get("page_no"), bool)
+        ):
+            raise ValueError(f'expect_pages entries need {{"doc_id": str, "page_no": int}}: {question}')
 
 
 def evaluate(cases: list[dict], ask_fn) -> EvalResult:
+    for case in cases:
+        _validate(case)
     result = EvalResult(total=len(cases))
     for case in cases:
-        # Vacuous pass guard: factual cases must have expect_contains
-        if not case.get("expect_not_found") and not case.get("expect_contains"):
-            raise ValueError(f"factual case needs expect_contains: {case['question']}")
         answer = ask_fn(case["question"])
         if _is_correct(case, answer):
             result.correct += 1
         else:
             result.failures.append(case["question"])
-        if all(v.status != "failed" for v in answer.claims):
+        statuses = [v.status for v in answer.claims]
+        result.weak_claims += statuses.count("weak")
+        result.unsupported_claims += statuses.count("unsupported")
+        result.failed_claims += statuses.count("failed")
+        if all(status == "verified" for status in statuses):
             result.citations_clean += 1
     return result
 
@@ -68,6 +102,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Correct:          {result.correct}/{result.total} ({result.correct_rate:.0%})")
     print(f"Citations clean:  {result.citations_clean}/{result.total}")
+    print(f"Weak claims:        {result.weak_claims}")
+    print(f"Unsupported claims: {result.unsupported_claims}")
+    print(f"Failed claims:      {result.failed_claims}")
     for question in result.failures:
         print(f"  FAILED: {question}")
     return 0 if result.correct_rate >= PASS_RATE else 1
