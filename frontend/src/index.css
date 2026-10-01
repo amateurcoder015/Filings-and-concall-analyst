@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+:root {
+  --accent: #0f766e;
+  --ink: #1c1917;
+  --muted: #78716c;
+  --line: #e7e5e4;
+  --paper: #fafaf9;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: "Inter", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.react-pdf__Page__textContent mark {
+  background: rgba(250, 204, 21, 0.45);
+  color: transparent;
+}
