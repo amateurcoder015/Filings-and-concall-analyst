@@ -1,4 +1,4 @@
-export type ClaimStatus = 'verified' | 'weak' | 'failed'
+export type ClaimStatus = 'verified' | 'weak' | 'unsupported' | 'failed'
 
 export interface Claim {
   text: string
@@ -12,6 +12,7 @@ export interface AskResponse {
   summary: string
   not_found: boolean
   mostly_unverified: boolean
+  summary_supported: boolean
   disclaimer: string
   claims: Claim[]
 }

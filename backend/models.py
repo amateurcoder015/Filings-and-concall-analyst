@@ -52,7 +52,7 @@ class Answer:
 @dataclass(frozen=True)
 class VerifiedClaim:
     claim: Claim
-    status: str  # "verified" | "weak" | "failed"
+    status: str  # "verified" | "weak" | "unsupported" | "failed"
 
 
 @dataclass
@@ -60,6 +60,8 @@ class VerifiedAnswer:
     summary: str
     claims: list[VerifiedClaim]
     not_found: bool
+    # Every figure in the summary appears in the quote of a verified claim (True for not_found answers).
+    summary_supported: bool = True
 
     @property
     def mostly_unverified(self) -> bool:

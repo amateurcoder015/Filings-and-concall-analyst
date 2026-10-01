@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ask } from '../api'
-import { numberClaims, statusLabel, statusTone } from '../lib/citations'
+import { autoOpenClaim, numberClaims, statusLabel, statusTone, summaryNotice } from '../lib/citations'
 import type { AskResponse, Claim, ClaimStatus } from '../types'
 
 interface Turn {
@@ -34,7 +34,7 @@ export function ChatPane({ period, onCite }: Props) {
     try {
       const answer = await ask(trimmed, period)
       setTurns((t) => t.map((turn, i) => (i === t.length - 1 ? { ...turn, answer } : turn)))
-      const firstVerified = answer.claims.find((c) => c.status === 'verified')
+      const firstVerified = autoOpenClaim(answer.claims)
       if (firstVerified) onCite(firstVerified)
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Something went wrong.'
@@ -105,7 +105,15 @@ function AnswerView({ answer, onCite }: { answer: AskResponse; onCite: (claim: C
           Most citations below could not be verified against the source. Treat this answer with caution.
         </p>
       )}
-      <p>{answer.summary}</p>
+      <div className="space-y-1">
+        <p className="text-xs uppercase tracking-wide text-[var(--muted)]">Model-written summary</p>
+        {summaryNotice(answer.summary_supported) && (
+          <p role="status" className="rounded bg-amber-100 px-3 py-1 text-xs text-amber-900">
+            {summaryNotice(answer.summary_supported)}
+          </p>
+        )}
+        <p>{answer.summary}</p>
+      </div>
       <ol className="space-y-2">
         {numberClaims(answer.claims).map(({ n, claim }) => (
           <li key={n} className={claim.status === 'failed' ? 'text-[var(--muted)]' : ''}>

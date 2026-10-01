@@ -255,9 +255,75 @@ def verify_claim(claim: Claim, page_text: str | None) -> str:
     return "weak"
 
 
+_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+# Characters that chain a number to its neighbours inside one token ("FY2025-26", "10/12", "1,234.5").
+_NUMBER_CHAIN = frozenset("0123456789-/.,")
+
+
+def _letter_glued(text: str, start: int, end: int) -> bool:
+    """The number at text[start:end] is part of a token that contains a letter (FY26, Q2, 4G,
+    FY2025-26, 5-year): walk outwards through digits and joiners and look for a letter."""
+    i = start - 1
+    while i >= 0 and text[i] in _NUMBER_CHAIN:
+        i -= 1
+    if i >= 0 and (text[i].isalpha() or text[i] == "_"):
+        return True
+    j = end
+    while j < len(text) and text[j] in _NUMBER_CHAIN:
+        j += 1
+    if j < len(text) and text[j] == "%":
+        return False
+    return j < len(text) and (text[j].isalpha() or text[j] == "_")
+
+
+def figure_tokens(text: str) -> set[str]:
+    """Pure numeric figures in `text`, canonicalised for comparison.
+
+    "1,234" == "1234", "21.1%" == "21.1", "-5" != "5", "(5.2)" == "-5.2". Letter-glued tokens (FY26, Q2,
+    4G, H1) and spelled-out numbers are not figures.
+    """
+    text = _normalize(text)
+    tokens: set[str] = set()
+    for match in _NUMBER.finditer(text):
+        start, end = match.span()
+        if _letter_glued(text, start, end):
+            continue
+        value = match.group().rstrip(".,").replace(",", "")
+        if not value:
+            continue
+        negative = False
+        # A minus glued to the digit is a sign, unless it joins two figures ("2025-26", "10-12").
+        if start > 0 and text[start - 1] == "-" and (start < 2 or not text[start - 2].isalnum()):
+            negative = True
+        # Accounting negative: "(5.2)" or "(5.2%)".
+        tail = text[end:].lstrip(",")
+        if start > 0 and text[start - 1] == "(" and (tail.startswith(")") or tail.startswith("%)")):
+            negative = True
+        if float(value) == 0:
+            negative = False
+        tokens.add(f"-{value}" if negative else value)
+    return tokens
+
+
 def verify(answer: Answer, index) -> VerifiedAnswer:
     verified: list[VerifiedClaim] = []
     for claim in answer.claims:
         page = index.get_page(claim.doc_id, claim.page_no)
-        verified.append(VerifiedClaim(claim, verify_claim(claim, page.text if page else None)))
-    return VerifiedAnswer(summary=answer.summary, claims=verified, not_found=answer.not_found)
+        status = verify_claim(claim, page.text if page else None)
+        if status == "verified" and not figure_tokens(claim.text) <= figure_tokens(claim.quote):
+            # The quote is on the page, but the claim states a figure the quote does not contain.
+            status = "unsupported"
+        verified.append(VerifiedClaim(claim, status))
+    summary_supported = True
+    if not answer.not_found:
+        backed: set[str] = set()
+        for item in verified:
+            if item.status == "verified":
+                backed |= figure_tokens(item.claim.quote)
+        summary_supported = figure_tokens(answer.summary) <= backed
+    return VerifiedAnswer(
+        summary=answer.summary,
+        claims=verified,
+        not_found=answer.not_found,
+        summary_supported=summary_supported,
+    )

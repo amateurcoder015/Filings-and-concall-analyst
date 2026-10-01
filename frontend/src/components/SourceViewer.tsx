@@ -12,9 +12,10 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url,
 ).toString()
 
-const NOTICE: Record<'weak' | 'failed', string> = {
+const NOTICE: Record<'weak' | 'unsupported' | 'failed', string> = {
   failed: 'Unverified: the quote could not be matched to this page',
   weak: 'Close match: check the page',
+  unsupported: 'The quote is on this page, but the claim states a figure the quote does not contain',
 }
 
 export function SourceViewer({ claim }: { claim: Claim | null }) {

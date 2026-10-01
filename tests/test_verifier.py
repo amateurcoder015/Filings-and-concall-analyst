@@ -623,3 +623,118 @@ def test_round5_direction_verb_changes_fail(quote, page):
 def test_round5_direction_verbs_identical_text_verifies(verb):
     text = f"Operating margins {verb} to 21.1% in the quarter"
     assert verify_claim(claim(text), f"Note: {text}.") == "verified"
+
+
+# --- Final fixes: claim text and summary figures --------------------------------
+
+from backend.verify.verifier import figure_tokens  # noqa: E402
+
+FIG_PAGE = (
+    "Operating margin for the quarter was 21.1% in Q2 FY26. Revenue moved from 1,000 to 1,120 crore. "
+    "Free cash flow conversion moved by -5% versus the prior quarter. Net debt stood at 1234 crore."
+)
+
+
+def fig_claim(text, quote):
+    return Claim(text=text, doc_id="q2", page_no=1, quote=quote)
+
+
+def status_for(text, quote, page=FIG_PAGE):
+    return verify(Answer(summary="s", claims=[fig_claim(text, quote)]), FakeIndex([Page("q2", 1, "results", "Q2", page)])).claims[0].status
+
+
+def test_figure_tokens_extracts_pure_numbers_only():
+    assert figure_tokens("Margin was 21.1% in Q2 FY26 on 4G, H1 and five units") == {"21.1"}
+    assert figure_tokens("1,234 and 1234.") == {"1234"}
+    assert figure_tokens("moved by -5% and 5%") == {"-5", "5"}
+    assert figure_tokens("loss of (5.2) crore") == {"-5.2"}
+    assert figure_tokens("FY2025-26 range 10-12") == {"10", "12"}
+    assert figure_tokens("no figures here") == set()
+
+
+def test_figure_tokens_canonical_forms():
+    assert figure_tokens("21.1%") == figure_tokens("21.1")
+    assert figure_tokens("1,234") == figure_tokens("1234")
+    assert figure_tokens("-5") != figure_tokens("5")
+    assert figure_tokens("value 7,") == {"7"}
+
+
+def test_claim_text_with_changed_figure_is_unsupported():
+    quote = "Operating margin for the quarter was 21.1% in Q2 FY26"
+    assert status_for("Operating margin was 25.1%", quote) == "unsupported"
+
+
+def test_claim_text_with_same_figures_is_verified():
+    quote = "Operating margin for the quarter was 21.1% in Q2 FY26"
+    assert status_for("Margin was 21.1% this quarter", quote) == "verified"
+
+
+def test_claim_text_without_figures_is_verified():
+    quote = "Operating margin for the quarter was 21.1% in Q2 FY26"
+    assert status_for("Margin held steady", quote) == "verified"
+
+
+def test_thousands_separator_in_claim_matches_plain_quote():
+    quote = "Net debt stood at 1234 crore"
+    assert status_for("Net debt was 1,234 crore", quote) == "verified"
+
+
+def test_dropped_sign_in_claim_is_unsupported():
+    quote = "Free cash flow conversion moved by -5% versus the prior quarter"
+    assert status_for("Conversion moved by 5%", quote) == "unsupported"
+
+
+def test_letter_glued_tokens_in_claim_are_ignored():
+    quote = "Operating margin for the quarter was 21.1%"
+    assert status_for("In Q2 FY26 margin was 21.1%", quote) == "verified"
+
+
+def test_derived_figure_not_in_quote_is_unsupported():
+    quote = "Revenue moved from 1,000 to 1,120 crore"
+    assert status_for("Revenue grew 12%", quote) == "unsupported"
+
+
+def test_weak_and_failed_are_unchanged_by_figure_check():
+    assert status_for("Margin was 99%", "The company announced a large share buyback programme") == "failed"
+    page = "The operating margin for the quarter was 21.1 per cent, down sharply."
+    assert status_for("Margin was 99%", "The operating margin for the quarter was 21.1 percent, down sharply.", page) == "weak"
+
+
+def test_unsupported_counts_as_bad_for_mostly_unverified():
+    c = claim("x" * 20)
+    va = VerifiedAnswer("s", [VerifiedClaim(c, "verified"), VerifiedClaim(c, "unsupported"), VerifiedClaim(c, "unsupported")], False)
+    assert va.mostly_unverified is True
+
+
+def _summary_result(summary, claims, not_found=False):
+    index = FakeIndex([Page("q2", 1, "results", "Q2", FIG_PAGE)])
+    return verify(Answer(summary=summary, claims=claims, not_found=not_found), index)
+
+
+def test_summary_supported_when_figures_are_in_verified_quotes():
+    quote = "Operating margin for the quarter was 21.1% in Q2 FY26"
+    result = _summary_result("Margin was 21.1% in Q2 FY26.", [fig_claim("Margin was 21.1%", quote)])
+    assert result.summary_supported is True
+
+
+def test_summary_unsupported_when_figure_is_not_in_any_verified_quote():
+    quote = "Operating margin for the quarter was 21.1% in Q2 FY26"
+    result = _summary_result("Margin was 25.1%.", [fig_claim("Margin was 21.1%", quote)])
+    assert result.summary_supported is False
+
+
+def test_summary_figures_only_count_from_verified_claims():
+    good = fig_claim("Margin was 21.1%", "Operating margin for the quarter was 21.1% in Q2 FY26")
+    unsupported = fig_claim("Revenue grew 12%", "Revenue moved from 1,000 to 1,120 crore")
+    result = _summary_result("Revenue rose from 1,000 to 1,120 crore.", [good, unsupported])
+    assert [c.status for c in result.claims] == ["verified", "unsupported"]
+    assert result.summary_supported is False
+
+
+def test_summary_without_figures_and_not_found_are_supported():
+    assert _summary_result("Margins held up.", []).summary_supported is True
+    assert _summary_result("Price was 1500 per share, not in filings.", [], not_found=True).summary_supported is True
+
+
+def test_verified_answer_summary_supported_defaults_true():
+    assert VerifiedAnswer("s", [], False).summary_supported is True

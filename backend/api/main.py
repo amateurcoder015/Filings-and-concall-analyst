@@ -67,6 +67,7 @@ def create_app(index, agent, docs: list[DocMeta], company: str, pdf_dir: Path) -
             "summary": verified.summary,
             "not_found": verified.not_found,
             "mostly_unverified": verified.mostly_unverified,
+            "summary_supported": verified.summary_supported,
             "disclaimer": DISCLAIMER,
             "claims": [
                 {

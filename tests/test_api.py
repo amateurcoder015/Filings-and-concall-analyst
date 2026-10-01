@@ -105,3 +105,25 @@ def test_pdf_endpoint_serves_the_file_and_404s_unknown_docs(index, pdf_dir):
     assert response.status_code == 200 and response.headers["content-type"] == "application/pdf"
     assert c.get("/pdf/ghost").status_code == 404
     assert c.get("/pdf/..%2Fmanifest").status_code == 404
+
+
+def test_ask_returns_summary_supported_true_for_supported_figures(index, pdf_dir):
+    body = client_for(index, pdf_dir, FakeAgent(answer=good_answer())).post("/ask", json={"question": "q"}).json()
+    assert body["summary_supported"] is True
+
+
+def test_claim_with_figure_not_in_quote_is_unsupported_and_summary_flagged(index, pdf_dir):
+    answer = Answer(
+        summary="Margin was 25.1%.",
+        claims=[Claim("Operating margin was 25.1%.", "q2-results", 1, MARGIN_PAGE)],
+    )
+    body = client_for(index, pdf_dir, FakeAgent(answer=answer)).post("/ask", json={"question": "q"}).json()
+    assert body["claims"][0]["status"] == "unsupported"
+    assert body["summary_supported"] is False
+    assert body["mostly_unverified"] is True
+
+
+def test_not_found_answer_summary_is_supported(index, pdf_dir):
+    answer = Answer(summary="This is not in the loaded filings.", claims=[], not_found=True)
+    body = client_for(index, pdf_dir, FakeAgent(answer=answer)).post("/ask", json={"question": "q"}).json()
+    assert body["summary_supported"] is True
