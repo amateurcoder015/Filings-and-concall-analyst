@@ -12,7 +12,7 @@ export function TopBar({ company, periods, period, onPeriod }: Props) {
       <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
         Period
         <select
-          className="rounded border border-[var(--line)] bg-white px-2 py-1 text-[var(--ink)]"
+          className="rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] border border-[var(--line)] bg-white px-2 py-1 text-[var(--ink)]"
           value={period ?? ''}
           onChange={(e) => onPeriod(e.target.value || null)}
         >

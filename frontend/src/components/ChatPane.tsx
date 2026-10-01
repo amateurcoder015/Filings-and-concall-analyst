@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ask } from '../api'
-import { numberClaims, statusLabel } from '../lib/citations'
-import type { AskResponse, Claim } from '../types'
+import { numberClaims, statusLabel, statusTone } from '../lib/citations'
+import type { AskResponse, Claim, ClaimStatus } from '../types'
 
 interface Turn {
   question: string
@@ -34,8 +34,8 @@ export function ChatPane({ period, onCite }: Props) {
     try {
       const answer = await ask(trimmed, period)
       setTurns((t) => t.map((turn, i) => (i === t.length - 1 ? { ...turn, answer } : turn)))
-      const first = answer.claims[0]
-      if (first) onCite(first)
+      const firstVerified = answer.claims.find((c) => c.status === 'verified')
+      if (firstVerified) onCite(firstVerified)
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Something went wrong.'
       setTurns((t) => t.map((turn, i) => (i === t.length - 1 ? { ...turn, error } : turn)))
@@ -53,7 +53,7 @@ export function ChatPane({ period, onCite }: Props) {
             {SUGGESTIONS.map((s) => (
               <button
                 key={s}
-                className="block text-left text-[var(--accent)] hover:underline"
+                className="block text-left text-[var(--accent)] hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                 onClick={() => submit(s)}
               >
                 {s}
@@ -64,7 +64,7 @@ export function ChatPane({ period, onCite }: Props) {
         {turns.map((turn, i) => (
           <div key={i} className="space-y-2">
             <p className="font-medium">{turn.question}</p>
-            {!turn.answer && !turn.error && <p className="text-sm text-[var(--muted)]">Reading the filings…</p>}
+            {!turn.answer && !turn.error && <p role="status" className="text-sm text-[var(--muted)]">Reading the filings…</p>}
             {turn.error && <p className="text-sm text-red-700">{turn.error}</p>}
             {turn.answer && <AnswerView answer={turn.answer} onCite={onCite} />}
           </div>
@@ -78,7 +78,8 @@ export function ChatPane({ period, onCite }: Props) {
         }}
       >
         <input
-          className="w-full rounded border border-[var(--line)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+          aria-label="Ask a question about the filings"
+          className="w-full rounded border border-[var(--line)] bg-white px-3 py-2 text-sm focus:border-[var(--accent)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
           placeholder="Ask about this filing…"
           value={draft}
           maxLength={1000}
@@ -100,26 +101,41 @@ function AnswerView({ answer, onCite }: { answer: AskResponse; onCite: (claim: C
   return (
     <div className="space-y-3 text-sm">
       {answer.mostly_unverified && (
-        <p className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
+        <p role="alert" className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
           Most citations below could not be verified against the source. Treat this answer with caution.
         </p>
       )}
       <p>{answer.summary}</p>
       <ol className="space-y-2">
         {numberClaims(answer.claims).map(({ n, claim }) => (
-          <li key={n} className={claim.status === 'failed' ? 'opacity-60' : ''}>
+          <li key={n} className={claim.status === 'failed' ? 'text-[var(--muted)]' : ''}>
             <button
-              className="mr-2 rounded bg-[var(--accent)] px-1.5 text-xs text-white"
+              className="mr-2 rounded bg-[var(--accent)] px-1.5 text-xs text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
               onClick={() => onCite(claim)}
               aria-label={`Open source for claim ${n}`}
             >
               {n}
             </button>
             {claim.text}
-            <span className="ml-2 text-xs text-[var(--muted)]">{statusLabel(claim.status)}</span>
+            <StatusBadge status={claim.status} />
           </li>
         ))}
       </ol>
     </div>
+  )
+}
+
+const TONE_CLASS = {
+  ok: 'border border-[var(--line)] text-[var(--muted)]',
+  caution: 'bg-amber-100 text-amber-900',
+  bad: 'bg-red-100 text-red-900',
+} as const
+
+export function StatusBadge({ status }: { status: ClaimStatus }) {
+  const text = status === 'verified' ? 'Verified' : statusLabel(status)
+  return (
+    <span className={`ml-2 whitespace-nowrap rounded px-1.5 py-0.5 text-xs ${TONE_CLASS[statusTone(status)]}`}>
+      {text}
+    </span>
   )
 }

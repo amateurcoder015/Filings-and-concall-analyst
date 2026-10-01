@@ -6,6 +6,17 @@ export async function fetchDocuments(): Promise<DocumentsResponse> {
   return response.json()
 }
 
+export function errorMessage(body: unknown, status: number): string {
+  const detail = (body as { detail?: unknown } | null)?.detail
+  if (detail === undefined || detail === null) return `Request failed (${status})`
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const msgs = detail.map((d) => (d && typeof d === 'object' && 'msg' in d ? String(d.msg) : JSON.stringify(d)))
+    return msgs.join('; ')
+  }
+  return JSON.stringify(detail)
+}
+
 export async function ask(question: string, period: string | null): Promise<AskResponse> {
   const response = await fetch('/api/ask', {
     method: 'POST',
@@ -14,7 +25,7 @@ export async function ask(question: string, period: string | null): Promise<AskR
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
-    throw new Error(body.detail ?? `Request failed (${response.status})`)
+    throw new Error(errorMessage(body, response.status))
   }
   return response.json()
 }

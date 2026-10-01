@@ -19,3 +19,16 @@ export function statusLabel(status: ClaimStatus): string {
       return 'Unverified'
   }
 }
+
+export type StatusTone = 'ok' | 'caution' | 'bad'
+
+export function statusTone(status: ClaimStatus): StatusTone {
+  switch (status) {
+    case 'verified':
+      return 'ok'
+    case 'weak':
+      return 'caution'
+    case 'failed':
+      return 'bad'
+  }
+}

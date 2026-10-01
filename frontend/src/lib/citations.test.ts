@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { numberClaims, statusLabel } from './citations'
+import { numberClaims, statusLabel, statusTone } from './citations'
 import type { Claim } from '../types'
 
 const claim = (text: string, status: Claim['status']): Claim => ({
@@ -22,5 +22,13 @@ describe('statusLabel', () => {
     expect(statusLabel('verified')).toBe('Verified in source')
     expect(statusLabel('weak')).toBe('Close match, check the source')
     expect(statusLabel('failed')).toBe('Unverified')
+  })
+})
+
+describe('statusTone', () => {
+  it('maps statuses to tones', () => {
+    expect(statusTone('verified')).toBe('ok')
+    expect(statusTone('weak')).toBe('caution')
+    expect(statusTone('failed')).toBe('bad')
   })
 })
