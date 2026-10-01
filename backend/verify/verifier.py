@@ -1,3 +1,14 @@
+"""Deterministic quote verifier: checks each claim's quote against the stored page text.
+
+Invariant: anything not provably identical in figures, signs, units, direction and negation goes to
+"weak" or "failed"; "weak" never counts as verified; a claim whose figures are not in its quote is
+"unsupported".
+
+Accepted limits:
+- Number reformatting such as 1200 vs 1,200 fails.
+- Semantic flips among long plain words at edit distance 1 can reach "weak".
+- A quote that omits a nearby qualifier still verifies.
+"""
 from __future__ import annotations
 
 import difflib

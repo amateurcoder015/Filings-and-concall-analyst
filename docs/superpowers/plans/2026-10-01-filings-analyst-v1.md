@@ -802,6 +802,8 @@ git push origin main
 
 ### Task 4: Quote verifier
 
+> **Superseded:** the verifier code below was hardened over five review rounds; the authoritative implementation is `backend/verify/verifier.py` and its tests.
+
 **Files:**
 - Create: `backend/verify/__init__.py`, `backend/verify/verifier.py`, `tests/test_verifier.py`
 
