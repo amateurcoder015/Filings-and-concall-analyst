@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { escapeHtml, normalize, shouldHighlight } from './highlight'
+import { escapeHtml, normalize, quoteKey, shouldHighlight } from './highlight'
 
 describe('normalize', () => {
   it('lowercases, unifies curly quotes and collapses whitespace', () => {
@@ -25,5 +25,20 @@ describe('shouldHighlight', () => {
 describe('escapeHtml', () => {
   it('escapes markup so PDF text cannot inject HTML', () => {
     expect(escapeHtml('<b>"A&B"</b>')).toBe('&lt;b&gt;&quot;A&amp;B&quot;&lt;/b&gt;')
+  })
+})
+
+describe('quoteKey', () => {
+  it('is a short stable hash of the quote', () => {
+    const key = quoteKey('Operating margin was 21.1%')
+    expect(key).toMatch(/^[0-9a-f]{1,8}$/)
+    expect(quoteKey('Operating margin was 21.1%')).toBe(key)
+  })
+  it('differs for different quotes on the same page', () => {
+    expect(quoteKey('Operating margin was 21.1%')).not.toBe(quoteKey('Revenue grew 3.1% in constant currency'))
+    expect(quoteKey('ab')).not.toBe(quoteKey('ba'))
+  })
+  it('handles an empty quote', () => {
+    expect(quoteKey('')).toMatch(/^[0-9a-f]{1,8}$/)
   })
 })

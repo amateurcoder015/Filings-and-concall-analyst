@@ -21,3 +21,13 @@ export function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
 }
+
+// Short FNV-1a hash, so a second claim on the same page gets a fresh PdfPage and re-highlights.
+export function quoteKey(quote: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < quote.length; i++) {
+    hash ^= quote.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16)
+}

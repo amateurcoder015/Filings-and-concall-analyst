@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Document, Page, pdfjs } from 'react-pdf'
 import 'react-pdf/dist/Page/TextLayer.css'
 import { pdfUrl } from '../api'
-import { escapeHtml, shouldHighlight } from '../lib/highlight'
+import { escapeHtml, quoteKey, shouldHighlight } from '../lib/highlight'
 import { statusLabel } from '../lib/citations'
 import { StatusBadge } from './ChatPane'
 import type { Claim } from '../types'
@@ -50,7 +50,7 @@ export function SourceViewer({ claim }: { claim: Claim | null }) {
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
         <PdfPage
-          key={`${claim.doc_id}:${claim.page_no}:${retry}`}
+          key={`${claim.doc_id}:${claim.page_no}:${quoteKey(claim.quote)}:${retry}`}
           claim={claim}
           onRetry={() => setRetry((r) => r + 1)}
         />

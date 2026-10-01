@@ -17,7 +17,7 @@ const SUGGESTIONS = [
 
 interface Props {
   period: string | null
-  onCite: (claim: Claim) => void
+  onCite: (claim: Claim | null) => void
 }
 
 export function ChatPane({ period, onCite }: Props) {
@@ -30,6 +30,8 @@ export function ChatPane({ period, onCite }: Props) {
     if (!trimmed || busy) return
     setDraft('')
     setBusy(true)
+    // Clear the previous answer's source so it never sits beside a new answer.
+    onCite(null)
     setTurns((t) => [...t, { question: trimmed }])
     try {
       const answer = await ask(trimmed, period)
